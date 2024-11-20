@@ -1,7 +1,3 @@
-/*---------------------------------------------------------
- * Copyright (C) Microsoft Corporation. All rights reserved.
- *--------------------------------------------------------*/
-
 'use strict';
 
 import * as vscode from 'vscode';
@@ -9,74 +5,69 @@ import { WorkspaceFolder, DebugConfiguration, ProviderResult, CancellationToken 
 import { AmxModXDebugSession } from './smDebug';
 import * as Net from 'net';
 
-/*
- * Set the following compile time flag to true if the
- * debug adapter should run inside the extension host.
- * Please note: the test suite does no longer work in this mode.
- */
 const EMBED_DEBUG_ADAPTER = true;
 
 export function activate(context: vscode.ExtensionContext) {
+    console.info("SourcePawn Debug Extension Activating...");
+    console.info("Workspace root:", vscode.workspace.rootPath);
+    console.info("Extension path:", context.extensionPath);
 
-	console.info("Activating...");
+    const provider = new AmxModXDebugConfigurationProvider()
+    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sourcepawn', provider));
+    context.subscriptions.push(provider);
 
-	const provider = new AmxModXDebugConfigurationProvider()
-	context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sourcepawn', provider));
-	context.subscriptions.push(provider);
-
+    console.info("Debug configuration provider registered successfully");
 }
 
 export function deactivate() {
-	console.info("Deactivating...");
+    console.info("SourcePawn Debug Extension Deactivating...");
 }
 
 class AmxModXDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
+    private _server?: Net.Server;
 
-	private _server?: Net.Server;
+    resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration> {
+        console.log("Resolving debug configuration...");
+        console.log("Workspace folder:", folder?.uri.fsPath);
+        console.log("Initial config:", config);
 
-	/**
-	 * Massage a debug configuration just before a debug session is being launched,
-	 * e.g. add all missing attributes to the debug configuration.
-	 */
-	resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration> {
+        if (!config.type && !config.request && !config.name) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && editor.document.languageId === 'sourcepawn') {
+                console.log("Creating default debug configuration for SourcePawn file");
+                config.type = 'sourcepawn';
+                config.name = 'Launch';
+                config.request = 'launch';
+                config.program = 'test';
+                config.stopOnEntry = true;
+            }
+        }
 
-		// if launch.json is missing or empty
-		if (!config.type && !config.request && !config.name) {
-			const editor = vscode.window.activeTextEditor;
-			if (editor && editor.document.languageId === 'sourcepawn' ) {
-				config.type = 'sourcepawn';
-				config.name = 'Launch';
-				config.request = 'launch';
-				config.program = 'test';
-				config.stopOnEntry = true;
-			}
-		}
+        if (EMBED_DEBUG_ADAPTER) {
+            if (!this._server) {
+                console.log("Starting debug server...");
+                this._server = Net.createServer(socket => {
+                    console.log("New debug connection established");
+                    const session = new AmxModXDebugSession();
+                    session.setRunAsServer(true);
+                    session.start(<NodeJS.ReadableStream>socket, socket);
+                }).listen(0);
 
-		if (EMBED_DEBUG_ADAPTER) {
-			// start port listener on launch of first debug session
-			if (!this._server) {
+                console.log("Debug server started on port:", (<Net.AddressInfo>this._server.address()).port);
+            }
 
-				// start listening on a random port
-				this._server = Net.createServer(socket => {
-					const session = new AmxModXDebugSession();
-					session.setRunAsServer(true);
-					session.start(<NodeJS.ReadableStream>socket, socket);
-				}).listen(0);
-			}
+            config.debugServer = (<Net.AddressInfo>this._server.address()).port;
+            console.log("Debug configuration resolved:", config);
+        }
 
-			// make VS Code connect to debug server instead of launching debug adapter
-			config.debugServer = (<Net.AddressInfo>this._server.address()).port
+        return config;
+    }
 
-			;
-		}
-
-		return config;
-	}
-
-	dispose() {
-		if (this._server) {
-			this._server.close();
-			this._server = undefined;
-		}
-	}
+    dispose() {
+        if (this._server) {
+            console.log("Closing debug server");
+            this._server.close();
+            this._server = undefined;
+        }
+    }
 }
